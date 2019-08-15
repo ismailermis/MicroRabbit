@@ -3,21 +3,19 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace MicroRabbit.Banking.Domain.Events
+namespace MicroRabbit.Transfer.Domain.Events
 {
     public class TransferCreatedEvent:Event
     {
         public int From {get;private set;}
         public int To {get;private set;}
         public decimal Amount {get;private set;}
-        public bool IsEndPublish { get; set; }
 
-        public TransferCreatedEvent(int from,int to, decimal amount,bool isEndPublish)
+        public TransferCreatedEvent(int from,int to, decimal amount)
         {
             From = from;
             To = to;
             Amount = amount;
-            IsEndPublish=isEndPublish;
         }
 
     }

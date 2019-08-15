@@ -2,6 +2,7 @@
 using MicroRabbit.Domain.Core.Bus;
 using MicroRabbit.Domain.Core.Commands;
 using MicroRabbit.Domain.Core.Events;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -13,14 +14,20 @@ using System.Threading.Tasks;
 
 namespace MicroRabbit.Infra.Bus
 {
-    public sealed class RabbitMQBus : IEventBus
+    public sealed class RabbitMQBus : IEventBus,IDisposable
     {
         private readonly IMediator _mediator;
         private readonly Dictionary<string, List<Type>> _handlers;
         private readonly List<Type> _eventTypes;
-        public RabbitMQBus(IMediator mediator)
+        //
+        private readonly IServiceScopeFactory _serviceScopeFactory;
+        private static ConnectionFactory factory;
+        private static IConnection connection;
+        private static IModel channel;
+        public RabbitMQBus(IMediator mediator ,IServiceScopeFactory serviceScopeFactory)
         {
             _mediator = mediator;
+            _serviceScopeFactory = serviceScopeFactory;
             _handlers = new Dictionary<string, List<Type>>();
             _eventTypes = new List<Type>();
         }
@@ -30,16 +37,28 @@ namespace MicroRabbit.Infra.Bus
         }
         public void Publish<T>(T @event) where T : Event
         {
-            var factory = new ConnectionFactory() { HostName = "localhost" };
-            using (var connection = factory.CreateConnection())
-            using (var channel = connection.CreateModel())
+             
+            if (connection ==null)
             {
+                factory = new ConnectionFactory() { HostName = "localhost" };
+                connection = factory.CreateConnection();
+                factory.AutomaticRecoveryEnabled=true;
+                factory.TopologyRecoveryEnabled=true;
+                factory.NetworkRecoveryInterval=TimeSpan.FromSeconds(5);
+                factory.UseBackgroundThreadsForIO=true;
+                factory.RequestedHeartbeat=2;
+                channel = connection.CreateModel();
+                var prop = channel.CreateBasicProperties();
+                prop.DeliveryMode =2;
+                 
+            }
+            
                 var eventName = @event.GetType().Name;
                 channel.QueueDeclare(eventName, false, false, false, null);
                 var message = JsonConvert.SerializeObject(@event);
                 var body = Encoding.UTF8.GetBytes(message);
                 channel.BasicPublish("", eventName, null, body);
-            }
+            
         }
 
         public void Subscribe<T, TH>()
@@ -107,17 +126,28 @@ namespace MicroRabbit.Infra.Bus
             if (_handlers.ContainsKey(eventName))
             {
                 var subscriptions = _handlers[eventName];
-                foreach (var subscription in subscriptions)
+                using (var scope = _serviceScopeFactory.CreateScope())
                 {
-                    var handler = Activator.CreateInstance(subscription);
+                    foreach (var subscription in subscriptions)
+                {
+                  //  var handler = Activator.CreateInstance(subscription); //old code
+                  var handler = scope.ServiceProvider.GetService(subscription);
                     if (handler == null) continue;
                     var eventType = _eventTypes.SingleOrDefault(t => t.Name == eventName);
                     var @event = JsonConvert.DeserializeObject(message, eventType);
                     var concreteType = typeof(IEventHandler<>).MakeGenericType(eventType);
 
-                    await (Task)concreteType.GetMethod("Hendler").Invoke(handler, new object[] { @event });
+                    await (Task)concreteType.GetMethod("Handler").Invoke(handler, new object[] { @event });
                 }
+                }
+                
             }
+        }
+
+        public void Dispose()
+        {
+            channel?.Dispose();
+            connection?.Dispose();
         }
     }
 }
